@@ -2,12 +2,15 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
+import typer
 
-input_file = "/data/Kaoutar/dev/py/kmers/test_data/trimming/jellyfish_31_100N_lane1/100N_lane1_20220218000_S1_L001_001_kmers.txt"
-output_path = "/data/Kaoutar/dev/py/kmers/figures/plot_31_figs_100000"
 
-def plot_kmer_distribution_kde(df, save_path=None, sample_size=10000):
-  
+# input_file = "/data/Kaoutar/dev/py/kmers/test_data/trimming/jellyfish_31_100N_lane1/100N_lane1_20220218000_S1_L001_001_kmers.txt"
+# output_path = "/data/Kaoutar/dev/py/kmers/figures/plot_31_figs_100000"
+
+def plot_kmer_distribution_kde(input_file:str, output_path:str, sample_size:int=10000):
+    df = pd.read_csv(input_file, sep=" ", names=["Kmer", "Count"], engine="python")
+    
     if len(df) > sample_size:
         df = df.sample(sample_size, random_state=42)
     
@@ -40,5 +43,5 @@ def plot_kmer_distribution_kde(df, save_path=None, sample_size=10000):
 
     plt.show()
 
-df = pd.read_csv(input_file, sep=" ", names=["Kmer", "Count"], engine="python")
-plot_kmer_distribution_kde(df, save_path=output_path)
+if __name__ == "__main__":
+    typer.run(plot_kmer_distribution_kde)
