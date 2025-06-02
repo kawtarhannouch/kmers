@@ -3,6 +3,17 @@ __pycache__/
 *.py[cod]
 *$py.class
 
+#folders to ignore
+figures/*
+figures_two/*
+filtered_kmers/*
+LICENSE/*
+meta_data/*
+README.md/*
+slurm_files/*
+test_data/*
+trash/*
+
 # C extensions
 *.so
 
