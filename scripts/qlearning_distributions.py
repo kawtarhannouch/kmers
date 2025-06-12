@@ -1,227 +1,156 @@
 import numpy as np
 import random
-from scipy.stats import gamma, poisson, nbinom
 from tqdm import trange
+from scipy.stats import poisson, gamma, nbinom
 
 def load_counts_from_file(file_path):
     with open(file_path, 'r') as f:
-        counts = [int(line.strip().split()[1]) for line in f]
+        counts = [int(line.strip().split()[1]) for line in f if line.strip()]
     return np.array(counts)
 
 def sort_counts(counts):
     return np.sort(counts)
-
-def filter_counts_in_range(counts, x_min, x_max):
-    return counts[(counts >= x_min) & (counts <= x_max)]
 
 def compute_empirical_distribution(data):
     x_vals, freqs = np.unique(data, return_counts=True)
     probs = freqs / freqs.sum()
     return x_vals, probs
 
-def fit_poisson_distribution(data):
-    mu = np.mean(data)
-    return mu
+def compute_theoretical_pmf(x_vals, x1, x2, data):
+    data_poisson = data[data <= x1]
+    data_gamma   = data[(data > x1) & (data <= x2)]
+    data_nbinom  = data[data > x2]
+    total = len(data)
 
-def compute_theoretical_poisson_pmf(x_vals, mu):
-    pmf_vals = poisson.pmf(x_vals, mu)
-    return pmf_vals / pmf_vals.sum()
+    w_p = len(data_poisson)/total 
+    w_g = len(data_gamma)/total 
+    w_n = len(data_nbinom)/total 
 
-def fit_gamma_distribution(data):
-    shape, loc, scale = gamma.fit(data, floc=0)
-    return shape, scale
+    pmf_p = poisson.pmf(x_vals, mu=np.mean(data_poisson)) if len(data_poisson)>0 else np.zeros_like(x_vals, float)
+    try:
+        shape, loc, scale = gamma.fit(data_gamma, floc=0)
+        pmf_g = gamma.pdf(x_vals, a=shape, loc=loc, scale=scale)
+    except:
+        pmf_g = np.zeros_like(x_vals, float)
 
-def compute_theoretical_gamma_pmf(x_vals, shape, scale):
-    pdf_vals = gamma.pdf(x_vals, a=shape, loc=0, scale=scale)
-    return pdf_vals / pdf_vals.sum()
+    mean_n = np.mean(data_nbinom) 
+    var_n  = np.var(data_nbinom) 
 
-def fit_negative_binomial_distribution(data):
-    mean = np.mean(data)
-    var = np.var(data)
-    if var > mean:
-        p = mean / var
-        r = mean * p / (1 - p)
-        return r, p
+    if len(data_nbinom)>0 and var_n>mean_n:
+        r = mean_n**2 / (var_n - mean_n)
+        p = mean_n / var_n
+        pmf_n = nbinom.pmf(x_vals, n=r, p=p)
     else:
-        return  None, None
+        pmf_n = np.zeros_like(x_vals, float)
 
-def compute_theoretical_negative_binomial_pmf(x_vals, r, p):
-    pmf_vals = nbinom.pmf(x_vals, n=r, p=p)
-    return pmf_vals / pmf_vals.sum()
+    mixture = w_p*pmf_p + w_g*pmf_g + w_n*pmf_n
+    s = mixture.sum()
+    return mixture/s if s>0 else mixture
 
-def compute_cross_entropy(p_empirical, q_theoretical):
-    return -np.sum(p_empirical * np.log(q_theoretical + 1e-10))
-
-def is_valid_state(x1, x2, min_count, max_count):
-    return (min_count <= x1 < max_count - 1) and (x1 < x2 <= max_count)
-
-class ActionPolicy(object):
-    """docstring for ActionPolicy"""
-    def __init__(self, min_count, max_count, increase):
-        super(ActionPolicy, self).__init__()
-        self.min_count = min_count
-        self.max_count = max_count
-        self.increase = increase
-
-        self.actions = None
-        self._create_actions()
-
-    def _action_stop(self, x1, x2):
-        return (0, 0)
-
-    def _action_dich_x1_increase(self, x1, x2):
-        dval = (x2 - x1) / 2
-        return (dval, 0)
-
-    def _action_dich_x1_decrease(self, x1, x2):
-        dval = (x1 - self.min_count) / 2
-        return (dval, 0)
-
-    def _action_dich_x2_increase(self, x1, x2):
-        dval = (self.max_count - x2) / 2
-        return (0, dval)
-
-    def _action_dich_x2_decrease(self, x1, x2):
-        dval = (x2 - self.x1) / 2
-        return (0, dval)
-
-    def _action_slight_x1_increase(self, x1, x2):
-        return (self.increase, 0)
-
-    def _action_slight_x1_decrease(self, x1, x2):
-        return (-self.increase. 0)
-
-    def _action_slight_x2_increase(self, x1, x2):
-        return (0, self.increase)
-
-    def _action_slight_x2_decrease(self, x1, x2):
-        return (0, self.increase)
-
-    def _create_actions(self):
-        self.actions = []
-        for key in dir(self):
-            if key.startswith("_action_"):
-                self.actions[key] = getattr(self, key)
-
-    def _get_action(self, x1, x2, action_id):
-        return self.actions[action_id](x1, x2)
+def compute_cross_entropy(p_emp, q_theor):
+    eps = 1e-10
+    return -np.sum(p_emp * np.log(q_theor + eps))
 
 class KmerQAgent:
-    def __init__(self, counts, min_count, max_count, alpha=0.3, gamma=0.3, epsilon=0.9):
-        self.counts = counts
+    def __init__(self, counts, min_count, max_count,
+                 alpha=0.3, gamma=0.3, epsilon=0.9, increase=50, k=0.01):
+        self.counts    = counts
         self.min_count = min_count
         self.max_count = max_count
-        self.alpha = alpha
-        self.gamma = gamma
-        self.epsilon = epsilon
-        # self.actions = [(-1, 0), (1, 0), (0, -50), (0, 50), (-1, -50), (1, 50)]
-        self.actions = self.ActionPolicy(min_count, max_count, increase=50)
-        self.q_table = self._init_q_table()
+        self.alpha     = alpha
+        self.gamma     = gamma
+        self.epsilon   = epsilon
+        self.increase  = increase
+        self.k         = k
 
-    def _init_q_table(self):
-        q_table = {}
-        for x1 in range(self.min_count, self.max_count):
-            for x2 in range(self.min_count, self.max_count + 1):
-                if is_valid_state(x1, x2, self.min_count, self.max_count):
-                    q_table[(x1, x2)] = [0 for _ in self.actions]
-        return q_table
+        self.actions = [
+            (0, 0),
+            lambda x1, x2: ((x2 - x1)//2, 0),
+            lambda x1, x2: (-(x1 - self.min_count)//2, 0),
+            lambda x1, x2: (0, (self.max_count - x2)//2),
+            lambda x1, x2: (0, -((x2 - x1)//2)),
+            lambda x1, x2: (self.increase, 0),
+            lambda x1, x2: (-self.increase, 0),
+            lambda x1, x2: (0, self.increase),
+            lambda x1, x2: (0, -self.increase),
+        ]
+
+        self.q_table = {}
+        filtered_counts = counts[(counts >= self.min_count) & (counts <= self.max_count)]
+        self.x_vals, self.p_emp = compute_empirical_distribution(filtered_counts)
 
     def choose_action(self, state):
-        if random.uniform(0, 1) < self.epsilon:
-            return random.choice(self.actions)
-        # return self.actions[np.argmax(self.q_table[state])]
-        action_id = np.argmax(self.q_table[state])
-        x1, x2 = state
-        return self.actions._get_action(x1, x2, action_id)
+        self.q_table.setdefault(state, [0] * len(self.actions))
+        if random.random() < self.epsilon:
+            return random.randrange(len(self.actions))
+        return int(np.argmax(self.q_table[state]))
 
-    def get_next_state(self, x1, x2, action):
-        dx1, dx2 = action
-        proposed_x1 = x1 + dx1
-        proposed_x2 = x2 + dx2
-        if is_valid_state(proposed_x1, proposed_x2, self.min_count, self.max_count):
-            return (proposed_x1, proposed_x2)
-        else:
-            return (x1, x2)
+    def get_next_state(self, x1, x2, action_id):
+        action = self.actions[action_id]
+        dx1, dx2 = action(x1, x2) if callable(action) else action
+        new_x1 = x1 + dx1
+        new_x2 = x2 + dx2
+        if not (self.min_count <= new_x1 < new_x2 <= self.max_count):
+            return x1, x2
+        return new_x1, new_x2
 
-    def get_reward(self, x1, x2):
-
-        data_poisson = filter_counts_in_range(self.counts, 0, x1)  
-        data_gamma = filter_counts_in_range(self.counts, x1 + 1, x2)
-        data_nb = filter_counts_in_range(self.counts, x2 + 1, self.max_count)
-
-       
-        ce_poisson = 0
-        if len(data_poisson) > 0:
-            x_pois, p_emp_pois = compute_empirical_distribution(data_poisson)
-            mu = fit_poisson_distribution(data_poisson)
-            q_pois = compute_theoretical_poisson_pmf(x_pois, mu)
-            ce_poisson = compute_cross_entropy(p_emp_pois, q_pois)
-            print(f"Poisson Cross-Entropy: {ce_poisson:.4f}")
-
-   
-        ce_gamma = 0
-        if len(data_gamma) > 0:
-            x_gamma, p_emp_gamma = compute_empirical_distribution(data_gamma)
-            shape, scale = fit_gamma_distribution(data_gamma)
-            q_gamma = compute_theoretical_gamma_pmf(x_gamma, shape, scale)
-            ce_gamma = compute_cross_entropy(p_emp_gamma, q_gamma)
-            print(f"Gamma Cross-Entropy: {ce_gamma:.4f}")
-
-      
-        ce_nb = 0
-        if len(data_nb) > 0:
-            x_nb, p_emp_nb = compute_empirical_distribution(data_nb)
-            r, p = fit_negative_binomial_distribution(data_nb)
-            if r is not None and p is not None:
-                q_nb = compute_theoretical_negative_binomial_pmf(x_nb, r, p)
-                ce_nb = compute_cross_entropy(p_emp_nb, q_nb)
-                print(f"NB Cross-Entropy: {ce_nb:.4f}")
-
-    
-        total_cross_entropy = ce_poisson + ce_gamma + ce_nb
-        print(f"Total Cross-Entropy: {total_cross_entropy:.4f}")
-
-        reward = -total_cross_entropy
-        print(f"Reward (negative total cross-entropy): {reward:.4f}")
+    def get_reward(self, x1, x2, prev=None):
+        filtered_counts = self.counts[(self.counts >= self.min_count) & (self.counts <= self.max_count)]
+        q = compute_theoretical_pmf(self.x_vals, x1, x2, filtered_counts)
+        reward = -compute_cross_entropy(self.p_emp, q)
+        if prev:
+            width_bonus = self.gamma * self.k * (x2 - x1) - self.k * (prev[1] - prev[0])
+            reward += width_bonus
         return reward
 
-    def update_q_table(self, state, action, reward, next_state):
-        a_idx = self.actions.index(action)
-        max_q = max(self.q_table[next_state])
-        self.q_table[state][a_idx] += self.alpha * (reward + self.gamma * max_q - self.q_table[state][a_idx])
+    def update_q_table(self, state, action_id, reward, next_state):
+        self.q_table.setdefault(state, [0] * len(self.actions))
+        self.q_table.setdefault(next_state, [0] * len(self.actions))
+        old_q = self.q_table[state][action_id]
+        max_nq = max(self.q_table[next_state])
+        self.q_table[state][action_id] += self.alpha * (reward + self.gamma * max_nq - old_q)
 
-    def init_state(self):
-        x1 = random.randint(self.min_count, self.max_count)
-        offset = random.randint(self.min_count, self.max_count)
-        x2 = x1 + offset
-        return (x1, x2)
+    def train(self, episodes=10000, steps=500):
+        for ep in trange(episodes, desc="Training"):
+            x1 = random.randint(self.min_count, self.max_count - 2)
+            x2 = random.randint(x1 + 1, self.max_count)
+            state = (x1, x2)
 
-    def train(self, episodes, steps_per_episode):
-        x1, x2 = self.init_state()
-        for episode in trange(episodes, desc="Training Progress"):
+            for st in range(steps):
+                a = self.choose_action(state)
+                new_state = self.get_next_state(*state, a)
+                reward = self.get_reward(*new_state, prev=state)
+                print(f"Ep{ep:03} Step{st:03} | x1={state[0]} x2={state[1]} → x1'={new_state[0]} x2'={new_state[1]} | Reward={reward:.6f}")
+                self.update_q_table(state, a, reward, new_state)
 
-            for step in range(steps_per_episode):
-                action = self.choose_action(state)
-                next_state = self.get_next_state(state[0], state[1], action)
-                reward = self.get_reward(next_state[0], next_state[1])
-                self.update_q_table(state, action, reward, next_state)
-                state = next_state
+                if new_state == state:
+                    break
+                state = new_state
 
-    def get_best_cutoffs(self):
-        def best_q_value(state):
-            return max(self.q_table[state])
-        best_state = max(self.q_table, key=best_q_value)
-        print("\nFinal Q-table (sample):")
-        print(f"\nBest cutoff found: x1 = {best_state[0]}, x2 = {best_state[1]}")
-        return best_state
+    def best_cutoffs(self):
+        best = max(self.q_table, key=lambda s: max(self.q_table[s]))
+        print(f"Best cutoffs found: x1={best[0]}, x2={best[1]}")
+        return best
 
-if __name__ == "__main__":
+def main():
     file_path = "/data/Kaoutar/dev/py/kmers/test_data/trimming/jellyfish_21_100N_lane1/100N_lane1_20220218000_S1_L001_001_kmers.txt"
     counts = load_counts_from_file(file_path)
     counts = sort_counts(counts)
+    min_c, max_c = 1, 10000
+    print(f"Empirical distribution computed over counts, range [{min_c}, {max_c}]")
 
-    max_count_in_data = 20000#int(np.max(counts))
-    min_count_in_data = 5
-    agent = KmerQAgent(counts, min_count=min_count_in_data, max_count=max_count_in_data)
-    agent.train(episodes=100, steps_per_episode=200)
-    best_cutoffs = agent.get_best_cutoffs()
+    filtered_counts = counts[(counts >= min_c) & (counts <= max_c)]
+
+    x_vals, p_emp = compute_empirical_distribution(filtered_counts)
+    q_theor = compute_theoretical_pmf(x_vals, 7, 1000, filtered_counts)
+    init_ce = compute_cross_entropy(p_emp, q_theor)
+
+    print(f"Initial CE for x1=7, x2=1000: {init_ce:.4f}\n")
+
+    agent = KmerQAgent(counts, min_c, max_c, alpha=0.3, gamma=0.3, epsilon=0.9, k=0.02)
+    agent.train(episodes=2000, steps=500)
+    agent.best_cutoffs()
+
+if __name__ == "__main__":
+    main()
+
