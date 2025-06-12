@@ -1,3 +1,0 @@
-grep "^>" 189N_lane1_20220816000_S16_L001_kmers_counts.txt | sed 's/>//' | sort -n | head -5  # small
-
-grep "^>" your_file.fasta | sed 's/>//' | sort -n | tail -5  #big 
