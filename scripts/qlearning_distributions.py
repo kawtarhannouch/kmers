@@ -110,7 +110,7 @@ class KmerQAgent:
         max_nq = max(self.q_table[next_state])
         self.q_table[state][action_id] += self.alpha * (reward + self.gamma * max_nq - old_q)
 
-    def train(self, episodes=10000, steps=500):
+    def train(self, episodes, steps):
         for ep in trange(episodes, desc="Training"):
             x1 = random.randint(self.min_count, self.max_count - 2)
             x2 = random.randint(x1 + 1, self.max_count)
